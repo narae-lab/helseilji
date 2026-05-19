@@ -16,6 +16,7 @@ const epley = (w, r) => (w && r) ? Math.round(Number(w) * (1 + Number(r) / 30)) 
 const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
 const weekStartStr = () => { const d = new Date(); d.setDate(d.getDate() - d.getDay()); return d.toISOString().split("T")[0]; };
 const emptyEx = () => ({ name: "", sets: Array(4).fill(null).map(() => ({ w: "", r: "" })) });
+const cleanMD = (t) => t.replace(/#{1,6}\s*/g,"").replace(/\*\*(.+?)\*\*/g,"$1").replace(/\*(.+?)\*/g,"$1").replace(/`(.+?)`/g,"$1").trim();
 
 const inp = { background: BG, border: `0.5px solid ${BD2}`, borderRadius: 20, color: T1, fontSize: 13, padding: "6px 12px", outline: "none", width: "100%", boxSizing: "border-box", fontFamily: "'Courier New', monospace" };
 const inpFlat = { background: BG, border: `0.5px solid ${BD2}`, borderRadius: 8, color: T1, fontSize: 13, padding: "5px 8px", outline: "none", width: "100%", boxSizing: "border-box", textAlign: "center", fontFamily: "'Courier New', monospace" };
@@ -52,7 +53,7 @@ export default function App() {
   const [tab, setTab] = useState("today");
   const [ready, setReady] = useState(false);
   const [setupDone, setSetupDone] = useState(false);
-  const [profile, setProfile] = useState({ age: "", height: "" });
+  const [profile, setProfile] = useState({ name: "", age: "", height: "", goalWeight: "", weeklyGoal: 3, wakeTime: "07:00", sleepTime: "23:00" });
   const [bodyDay, setBodyDay] = useState(1);
   const [logs, setLogs] = useState([]);
   const [bodyLogs, setBodyLogs] = useState([]);
@@ -69,13 +70,14 @@ export default function App() {
   const [coachLoading, setCoachLoading] = useState(false);
   const [savedToday, setSavedToday] = useState(false);
   const [expandLog, setExpandLog] = useState(null);
+  const [settingsTab, setSettingsTab] = useState("profile");
 
   const td = todayStr();
 
   useEffect(() => {
     try {
       const p = localStorage.getItem("fl_profile");
-      if (p) { setProfile(JSON.parse(p)); setSetupDone(true); } else { setReady(true); return; }
+      if (p) { setProfile({...JSON.parse(p)}); setSetupDone(true); } else { setReady(true); return; }
       try { const bd = localStorage.getItem("fl_bodyDay"); if (bd) setBodyDay(parseInt(bd)); } catch(_) {}
       try { const l = localStorage.getItem("fl_logs"); if (l) setLogs(JSON.parse(l)); } catch(_) {}
       try { const bl = localStorage.getItem("fl_bodyLogs"); if (bl) setBodyLogs(JSON.parse(bl)); } catch(_) {}
@@ -92,6 +94,18 @@ export default function App() {
           if (d.note) setNote(d.note);
           if (d.coaching) setCoaching(d.coaching);
           setSavedToday(true);
+        }
+      } catch(_) {}
+      // 신체지표 오늘 기록 불러오기
+      try {
+        const bl = localStorage.getItem("fl_bodyLogs");
+        if (bl) {
+          const parsed = JSON.parse(bl);
+          const todayBody = parsed.find(b => b.date === td);
+          if (todayBody) {
+            setBodyInput({ weight: todayBody.weight||"", muscle: todayBody.muscle||"", fat: todayBody.fat||"", fatRate: todayBody.fatRate||"" });
+            setShowBodyForm(true);
+          }
         }
       } catch(_) {}
     } catch(_) {}
@@ -123,65 +137,58 @@ export default function App() {
     setCoachLoading(true);
     try {
       const exSum = exercises.filter(e => e.name).map(e => `${e.name}(볼륨${getVol(e).toFixed(0)}kg, 1RM ${getMaxRM(e)}kg)`).join(" / ") || "없음";
-
       const now = new Date();
       const oneWeekAgo = new Date(now); oneWeekAgo.setDate(now.getDate() - 7);
       const oneMonthAgo = new Date(now); oneMonthAgo.setDate(now.getDate() - 30);
-      const weekLogs = logs.filter(l => new Date(l.date) >= oneWeekAgo);
-      const monthLogs = logs.filter(l => new Date(l.date) >= oneMonthAgo);
-      const avgEnergy = (arr) => arr.filter(l=>l.energy).length ? (arr.reduce((s,l)=>s+(l.energy||0),0)/arr.filter(l=>l.energy).length).toFixed(1) : "없음";
-      const avgSleep = (arr) => arr.filter(l=>l.sleep?.actual).length ? (arr.reduce((s,l)=>s+(parseFloat(l.sleep?.actual)||0),0)/arr.filter(l=>l.sleep?.actual).length).toFixed(1) : "없음";
+      const weekLogs = newLogs.filter(l => new Date(l.date) >= oneWeekAgo);
+      const monthLogs = newLogs.filter(l => new Date(l.date) >= oneMonthAgo);
+      const hasWeekData = weekLogs.length > 1;
+      const hasMonthData = monthLogs.length > 1;
+      const avgEnergy = (arr) => arr.filter(l=>l.energy).length ? (arr.reduce((s,l)=>s+(l.energy||0),0)/arr.filter(l=>l.energy).length).toFixed(1) : null;
+      const avgSleep = (arr) => arr.filter(l=>l.sleep?.actual).length ? (arr.reduce((s,l)=>s+(parseFloat(l.sleep?.actual)||0),0)/arr.filter(l=>l.sleep?.actual).length).toFixed(1) : null;
       const workoutCount = (arr) => arr.filter(l=>l.cardio?.type||(l.exercises||[]).some(e=>e.name)).length;
-
-      // 마지막 운동일로부터 며칠째 안 했는지
-      const allWorkoutDates = logs
-        .filter(l=>l.cardio?.type||(l.exercises||[]).some(e=>e.name))
-        .map(l=>l.date).sort().reverse();
+      const allWorkoutDates = newLogs.filter(l=>l.cardio?.type||(l.exercises||[]).some(e=>e.name)).map(l=>l.date).sort().reverse();
       const lastWorkoutDate = allWorkoutDates[0];
-      const daysSinceWorkout = lastWorkoutDate
-        ? Math.floor((now - new Date(lastWorkoutDate)) / 86400000)
-        : 99;
+      const daysSinceWorkout = lastWorkoutDate ? Math.floor((now - new Date(lastWorkoutDate)) / 86400000) : 99;
 
-      const prompt = `당신은 전문 PT 트레이너입니다. 오늘 기록과 최근 1주일, 1개월 데이터를 비교 분석해서 한국어 존댓말로 코칭해주세요. 이모티콘 사용 금지.
+      let trendSection = "";
+      if (hasWeekData && hasMonthData) {
+        trendSection = `
+[최근 1주일 요약 (${weekLogs.length}일 기록)]
+운동 횟수: ${workoutCount(weekLogs)}회
+평균 에너지: ${avgEnergy(weekLogs)||"없음"}/5점
+평균 실수면시간: ${avgSleep(weekLogs)||"없음"}시간
+
+[최근 1개월 요약 (${monthLogs.length}일 기록)]
+운동 횟수: ${workoutCount(monthLogs)}회
+평균 에너지: ${avgEnergy(monthLogs)||"없음"}/5점
+평균 실수면시간: ${avgSleep(monthLogs)||"없음"}시간`;
+      }
+
+      const prompt = `당신은 전문 PT 트레이너입니다. 마크다운 기호(**,##,*)를 절대 사용하지 마세요. 한국어 존댓말로 코칭해주세요. 이모티콘 사용 금지.
 
 [오늘 기록]
-사용자: 나이 ${profile.age||"?"}세, 키 ${profile.height||"?"}cm
+사용자: ${profile.name||"회원"}, 나이 ${profile.age||"?"}세, 키 ${profile.height||"?"}cm
 유산소: ${cardio.type||"없음"}${cardio.duration?" "+cardio.duration+"분":""}${cardio.distance?" "+cardio.distance+"km":""}
 웨이트: ${exSum}
 수면점수: ${sleep.score||"미입력"}, 수면시간: ${sleep.inBed||"미입력"}시간, 실수면시간: ${sleep.actual||"미입력"}시간
 에너지 레벨: ${energy}/5점
 식단: 아침(${diet.morning||"미입력"}) 점심(${diet.lunch||"미입력"}) 저녁(${diet.dinner||"미입력"}) 간식(${diet.snack||"미입력"})
 한줄평: ${note||"없음"}
+${trendSection}
+${daysSinceWorkout >= 3 ? `[경고] 마지막 운동으로부터 ${daysSinceWorkout}일이 지났습니다.` : ''}
 
-[최근 1주일 요약 (${weekLogs.length}일 기록)]
-운동 횟수: ${workoutCount(weekLogs)}회
-평균 에너지: ${avgEnergy(weekLogs)}/5점
-평균 실수면시간: ${avgSleep(weekLogs)}시간
-
-[최근 1개월 요약 (${monthLogs.length}일 기록)]
-운동 횟수: ${workoutCount(monthLogs)}회
-평균 에너지: ${avgEnergy(monthLogs)}/5점
-평균 실수면시간: ${avgSleep(monthLogs)}시간
-
-${daysSinceWorkout >= 3 ? `
-[경고] 마지막 운동으로부터 ${daysSinceWorkout}일이 지났습니다. 운동 미실시 상태입니다.` : ''}
-
-위 데이터를 바탕으로 3문장으로 피드백해주세요:
-1. 오늘 잘한 점 (운동을 ${daysSinceWorkout}일째 안 했다면 잘한 점 대신 강하게 질책해주세요. 변명 여지 없이 직설적으로, 독하게. 운동의 중요성과 지금 당장 해야 하는 이유를 말해주세요)
-2. 이번 주 vs 이번 달 트렌드 비교
-3. 내일/이번 주 개선 조언`;
+아래 3가지를 각각 1-2문장으로 간결하게 작성해주세요:
+1. 오늘의 평가${daysSinceWorkout >= 3 ? " (운동 미실시를 강하게 질책, 직설적으로)" : ""}
+${trendSection ? "2. 이번 주 vs 이번 달 트렌드 비교\n3." : "2."} 내일 개선 조언`;
 
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6",
-          max_tokens: 1000,
-          messages: [{ role: "user", content: prompt }]
-        })
+        body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 400, messages: [{ role: "user", content: prompt }] })
       });
       const data = await res.json();
-      const c = data.content?.[0]?.text || "코칭 생성 실패";
+      const c = cleanMD(data.content?.[0]?.text || "코칭 생성 실패");
       setCoaching(c);
       localStorage.setItem("fl_log_" + td, JSON.stringify({ ...logData, coaching: c }));
     } catch(_) { setCoaching("코칭 생성 중 오류가 발생했어요."); }
@@ -222,8 +229,20 @@ ${daysSinceWorkout >= 3 ? `
           <div style={{ fontSize: 13, color: T3 }}>// 시작 전에 기본 정보를 입력해주세요</div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ ...card, padding: "12px 14px" }}><div style={lbl}>이름</div><input style={inp} type="text" placeholder="홍길동" value={profile.name||""} onChange={e => setProfile({ ...profile, name: e.target.value })} /></div>
           <div style={{ ...card, padding: "12px 14px" }}><div style={lbl}>나이</div><input style={inp} type="number" placeholder="26" value={profile.age} onChange={e => setProfile({ ...profile, age: e.target.value })} /></div>
           <div style={{ ...card, padding: "12px 14px" }}><div style={lbl}>키 (cm)</div><input style={inp} type="number" placeholder="165" value={profile.height} onChange={e => setProfile({ ...profile, height: e.target.value })} /></div>
+          <div style={{ ...card, padding: "12px 14px" }}><div style={lbl}>목표 체중 (kg)</div><input style={inp} type="number" placeholder="55" value={profile.goalWeight||""} onChange={e => setProfile({ ...profile, goalWeight: e.target.value })} /></div>
+          <div style={{ ...card, padding: "12px 14px" }}>
+            <div style={{ ...lbl, marginBottom: 8 }}>주 목표 운동 횟수</div>
+            <div style={{ display: "flex", gap: 5 }}>
+              {[1,2,3,4,5,6,7].map(n => <button key={n} onClick={() => setProfile({...profile, weeklyGoal: n})} style={{ flex: 1, padding: "7px 0", background: (profile.weeklyGoal||3)===n ? CYL : BG, color: (profile.weeklyGoal||3)===n ? CY : T3, border: `0.5px solid ${(profile.weeklyGoal||3)===n ? CYB : BD2}`, borderRadius: 8, fontSize: 13, cursor: "pointer", fontFamily: "'Courier New', monospace" }}>{n}</button>)}
+            </div>
+          </div>
+          <div style={{ ...card, padding: "12px 14px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <div><div style={lbl}>기상 시간</div><input style={{...inp, borderRadius: 8}} type="time" value={profile.wakeTime||"07:00"} onChange={e => setProfile({...profile, wakeTime: e.target.value})} /></div>
+            <div><div style={lbl}>취침 시간</div><input style={{...inp, borderRadius: 8}} type="time" value={profile.sleepTime||"23:00"} onChange={e => setProfile({...profile, sleepTime: e.target.value})} /></div>
+          </div>
           <div style={{ ...card, padding: "12px 14px" }}>
             <div style={{ ...lbl, marginBottom: 8 }}>신체 지표 측정 요일</div>
             <div style={{ display: "flex", gap: 5 }}>
@@ -236,20 +255,83 @@ ${daysSinceWorkout >= 3 ? `
     </div>
   );
 
+  // Settings 탭
+  if (tab === "settings") return (
+    <div style={{ background: BG, minHeight: "100vh", fontFamily: "'Courier New', monospace" }}>
+      <div style={{ maxWidth: 520, margin: "0 auto" }}>
+        <div style={{ background: CA, borderBottom: `0.5px solid ${BD}`, padding: "9px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 10 }}>
+          <div style={{ fontSize: 18, fontWeight: 500, color: T1 }}>Fit<span style={{ color: CY }}>Log</span><span style={{ color: PK }}>.</span></div>
+          <button onClick={() => setTab("today")} style={{ background: "none", border: "none", color: T3, cursor: "pointer", fontSize: 13, fontFamily: "'Courier New', monospace" }}>← 돌아가기</button>
+        </div>
+        <div style={{ display: "flex", gap: 6, padding: "10px 10px 0", overflowX: "auto" }}>
+          {[["profile","프로필"],["goal","운동 목표"],["alarm","알림 시간"],["body","측정 요일"]].map(([id, label]) => (
+            <button key={id} onClick={() => setSettingsTab(id)} style={{ padding: "6px 14px", borderRadius: 20, border: `0.5px solid ${settingsTab===id ? CYB : BD2}`, background: settingsTab===id ? CYL : BG, color: settingsTab===id ? CY : T3, fontSize: 13, cursor: "pointer", fontFamily: "'Courier New', monospace", flexShrink: 0 }}>{label}</button>
+          ))}
+        </div>
+        <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+          {settingsTab === "profile" && (
+            <div style={{ ...card, padding: "14px" }}>
+              {[["이름","name","text","홍길동"],["나이","age","number","26"],["키 (cm)","height","number","165"],["목표 체중 (kg)","goalWeight","number","55"]].map(([label, key, type, ph]) => (
+                <div key={key} style={{ marginBottom: 12 }}>
+                  <div style={lbl}>{label}</div>
+                  <input style={{...inp, borderRadius: 8}} type={type} placeholder={ph} value={profile[key]||""} onChange={e => setProfile({...profile, [key]: e.target.value})} />
+                </div>
+              ))}
+              <button onClick={saveProfile} style={{ width: "100%", background: CYL, color: CY, border: `0.5px solid ${CYB}`, borderRadius: 20, padding: "10px 0", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Courier New', monospace" }}>저장</button>
+            </div>
+          )}
+          {settingsTab === "goal" && (
+            <div style={{ ...card, padding: "14px" }}>
+              <div style={{ ...lbl, marginBottom: 10 }}>주 목표 운동 횟수</div>
+              <div style={{ display: "flex", gap: 5, marginBottom: 16 }}>
+                {[1,2,3,4,5,6,7].map(n => <button key={n} onClick={() => setProfile({...profile, weeklyGoal: n})} style={{ flex: 1, padding: "10px 0", background: (profile.weeklyGoal||3)===n ? CYL : BG, color: (profile.weeklyGoal||3)===n ? CY : T3, border: `0.5px solid ${(profile.weeklyGoal||3)===n ? CYB : BD2}`, borderRadius: 8, fontSize: 13, cursor: "pointer", fontFamily: "'Courier New', monospace" }}>{n}</button>)}
+              </div>
+              <button onClick={saveProfile} style={{ width: "100%", background: CYL, color: CY, border: `0.5px solid ${CYB}`, borderRadius: 20, padding: "10px 0", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Courier New', monospace" }}>저장</button>
+            </div>
+          )}
+          {settingsTab === "alarm" && (
+            <div style={{ ...card, padding: "14px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+                <div><div style={lbl}>기상 시간</div><input style={{...inp, borderRadius: 8}} type="time" value={profile.wakeTime||"07:00"} onChange={e => setProfile({...profile, wakeTime: e.target.value})} /></div>
+                <div><div style={lbl}>취침 시간</div><input style={{...inp, borderRadius: 8}} type="time" value={profile.sleepTime||"23:00"} onChange={e => setProfile({...profile, sleepTime: e.target.value})} /></div>
+              </div>
+              <button onClick={saveProfile} style={{ width: "100%", background: CYL, color: CY, border: `0.5px solid ${CYB}`, borderRadius: 20, padding: "10px 0", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Courier New', monospace" }}>저장</button>
+            </div>
+          )}
+          {settingsTab === "body" && (
+            <div style={{ ...card, padding: "14px" }}>
+              <div style={{ ...lbl, marginBottom: 10 }}>신체 지표 측정 요일</div>
+              <div style={{ display: "flex", gap: 5, marginBottom: 16 }}>
+                {DAYS_SHORT.map((d, i) => <button key={i} onClick={() => setBodyDay(i)} style={{ flex: 1, padding: "10px 0", background: bodyDay===i ? CYL : BG, color: bodyDay===i ? CY : T3, border: `0.5px solid ${bodyDay===i ? CYB : BD2}`, borderRadius: 8, fontSize: 13, cursor: "pointer", fontFamily: "'Courier New', monospace" }}>{d}</button>)}
+              </div>
+              <button onClick={() => { localStorage.setItem("fl_bodyDay", String(bodyDay)); saveProfile(); }} style={{ width: "100%", background: CYL, color: CY, border: `0.5px solid ${CYB}`, borderRadius: 20, padding: "10px 0", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Courier New', monospace" }}>저장</button>
+            </div>
+          )}
+        </div>
+        <div style={{ display: "flex", borderTop: `0.5px solid ${BD}`, background: CA, position: "sticky", bottom: 0 }}>
+          {[["today","ti-home"],["dashboard","ti-chart-bar"],["calendar","ti-calendar"],["history","ti-history"],["settings","ti-settings"]].map(([id, icon]) => (
+            <button key={id} onClick={() => setTab(id)} style={{ flex: 1, padding: "9px 4px 7px", background: "none", border: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, cursor: "pointer", outline: "none" }}>
+              <i className={`ti ${icon}`} style={{ fontSize: 19, color: tab===id ? CY : T4 }} aria-hidden="true" />
+              {tab===id && <div style={{ width: 4, height: 4, borderRadius: "50%", background: CY }} />}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div style={{ background: BG, minHeight: "100vh", fontFamily: "'Courier New', monospace" }}>
       <div style={{ maxWidth: 520, margin: "0 auto" }}>
 
-        {/* 상단 타이틀바 */}
         <div style={{ background: CA, borderBottom: `0.5px solid ${BD}`, padding: "9px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 10 }}>
           <div style={{ fontSize: 18, fontWeight: 500, color: T1, letterSpacing: -0.5 }}>Fit<span style={{ color: CY }}>Log</span><span style={{ color: PK }}>.</span></div>
           <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
             <i className="ti ti-bell" style={{ fontSize: 20, color: T2 }} aria-hidden="true" />
-            <button onClick={() => setSetupDone(false)} style={{ background: "none", border: "none", cursor: "pointer", padding: 0, lineHeight: 1 }}><i className="ti ti-settings" style={{ fontSize: 20, color: T2 }} aria-hidden="true" /></button>
+            <button onClick={() => setTab("settings")} style={{ background: "none", border: "none", cursor: "pointer", padding: 0, lineHeight: 1 }}><i className="ti ti-settings" style={{ fontSize: 20, color: T2 }} aria-hidden="true" /></button>
           </div>
         </div>
 
-        {/* 스토리 영역 */}
         <div style={{ display: "flex", gap: 14, padding: "12px 14px", borderBottom: `0.5px solid ${BD}`, background: CA, overflowX: "auto" }}>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5, flexShrink: 0 }}>
             <div style={{ width: 52, height: 52, borderRadius: "50%", border: `2px solid ${BD2}`, padding: 2.5, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -273,7 +355,6 @@ ${daysSinceWorkout >= 3 ? `
           ))}
         </div>
 
-        {/* 탭 */}
         <div style={{ display: "flex", borderBottom: `0.5px solid ${BD}`, background: CA, position: "sticky", top: 44, zIndex: 10 }}>
           {[["today","Today"],["dashboard","Dashboard"],["calendar","Calendar"],["history","History"]].map(([id, label]) => (
             <button key={id} onClick={() => setTab(id)} style={{ flex: 1, padding: "9px 4px", background: "none", border: "none", borderBottom: tab===id ? `2px solid ${CY}` : "2px solid transparent", color: tab===id ? CY : T3, cursor: "pointer", fontSize: 13, fontWeight: tab===id ? 700 : 400, fontFamily: "'Courier New', monospace" }}>{label}</button>
@@ -301,7 +382,6 @@ ${daysSinceWorkout >= 3 ? `
               </div>
             )}
 
-            {/* Cardio */}
             <div style={card}>
               <CardHead iconBg={CYL} iconColor={CY} icon="ti-run" title="Cardio" sub={cardio.type ? `${cardio.type}${cardio.duration ? " · "+cardio.duration+"분" : ""}` : null} badge={cardio.type ? <span style={bcy}>완료</span> : null} />
               <div style={{ padding: "10px 12px", display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 8 }}>
@@ -311,7 +391,6 @@ ${daysSinceWorkout >= 3 ? `
               </div>
             </div>
 
-            {/* Weights */}
             <div style={card}>
               <CardHead iconBg={PKL} iconColor={PK} icon="ti-barbell" title="Weights" sub={exercises.filter(e=>e.name).map(e=>e.name).join(" · ")||null} badge={<span style={bpk}>{exercises.filter(e=>e.name).length} 종목</span>} />
               <div style={{ padding: "10px 12px" }}>
@@ -333,10 +412,7 @@ ${daysSinceWorkout >= 3 ? `
                       {exercises.length > 1 && <button onClick={() => setExercises(exercises.filter((_,i)=>i!==ei))} style={{ background: "none", border: "none", color: T4, cursor: "pointer", padding: 4 }}><i className="ti ti-trash" style={{ fontSize: 13 }} /></button>}
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "24px 1fr 1fr 64px", gap: 4, marginBottom: 4 }}>
-                      <span />
-                      <span style={{ fontSize: 12, color: T2, textAlign: "center" }}>무게 kg</span>
-                      <span style={{ fontSize: 12, color: T2, textAlign: "center" }}>횟수</span>
-                      <span style={{ fontSize: 12, color: AM, textAlign: "center", fontWeight: 600 }}>1RM</span>
+                      <span /><span style={{ fontSize: 12, color: T2, textAlign: "center" }}>무게 kg</span><span style={{ fontSize: 12, color: T2, textAlign: "center" }}>횟수</span><span style={{ fontSize: 12, color: AM, textAlign: "center", fontWeight: 600 }}>1RM</span>
                     </div>
                     {ex.sets.map((st, si) => {
                       const rm = epley(st.w, st.r);
@@ -365,7 +441,6 @@ ${daysSinceWorkout >= 3 ? `
               </div>
             </div>
 
-            {/* Condition */}
             <div style={card}>
               <CardHead iconBg={PUL} iconColor={PU} icon="ti-mood-smile" title="Condition" />
               <div style={{ padding: "10px 12px" }}>
@@ -391,7 +466,6 @@ ${daysSinceWorkout >= 3 ? `
               </div>
             </div>
 
-            {/* Meal */}
             <div style={card}>
               <CardHead iconBg={GRL} iconColor={GR} icon="ti-salad" title="Meal Notes" />
               <div style={{ padding: "10px 12px" }}>
@@ -404,14 +478,14 @@ ${daysSinceWorkout >= 3 ? `
               </div>
             </div>
 
-            <button onClick={saveLog} disabled={coachLoading} style={{ background: coachLoading ? CYL : CYL, color: CY, border: `0.5px solid ${CYB}`, borderRadius: 22, padding: "11px 0", fontSize: 13, fontWeight: 700, cursor: coachLoading ? "default" : "pointer", width: "100%", fontFamily: "'Courier New', monospace" }}>
+            <button onClick={saveLog} disabled={coachLoading} style={{ background: CYL, color: CY, border: `0.5px solid ${CYB}`, borderRadius: 22, padding: "11px 0", fontSize: 13, fontWeight: 700, cursor: coachLoading ? "default" : "pointer", width: "100%", fontFamily: "'Courier New', monospace" }}>
               {coachLoading ? "저장 중 · PT Coaching 생성 중..." : savedToday ? "기록 업데이트 & 재코칭 →" : "Save Today & Get AI Coaching →"}
             </button>
 
             {(coaching || coachLoading) && (
               <div style={{ background: GRL, border: `0.5px solid ${GRB}`, borderRadius: 10, padding: "10px 13px" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 6 }}><i className="ti ti-sparkles" style={{ fontSize: 13, color: GR }} aria-hidden="true" /><span style={{ fontSize: 13, fontWeight: 700, color: GR }}>PT Coaching</span></div>
-                {coachLoading ? <div style={{ fontSize: 13, color: GR }}>// 분석 중...</div> : <div style={{ fontSize: 13, color: T1, lineHeight: 1.9 }}>{coaching}</div>}
+                {coachLoading ? <div style={{ fontSize: 13, color: GR }}>// 분석 중...</div> : <div style={{ fontSize: 13, color: T1, lineHeight: 1.9, whiteSpace: "pre-line" }}>{coaching}</div>}
               </div>
             )}
           </>}
@@ -422,7 +496,7 @@ ${daysSinceWorkout >= 3 ? `
                 { label: "Weight", val: lastBody ? `${lastBody.weight} kg` : "—", sub: wDelta ? (parseFloat(wDelta)<0 ? `▼ ${Math.abs(wDelta)} kg` : `▲ ${wDelta} kg`) : "기록 없음", sc: wDelta ? (parseFloat(wDelta)<0 ? GR : PK) : T4, bg: CYL, br: CYB },
                 { label: "Squat 1RM", val: (() => { const r = getAllMax(); return r["스쿼트"] ? `${r["스쿼트"]} kg` : "—"; })(), sub: "개인 최고 기록", sc: AM, bg: AML, br: AMB },
                 { label: "Body Fat %", val: lastBody?.fatRate ? `${lastBody.fatRate} %` : "—", sub: lastBody?.muscle ? `골격근 ${lastBody.muscle}kg` : "기록 없음", sc: GR, bg: GRL, br: GRB },
-                { label: "This Week", val: `${thisWeek}회`, sub: `총 ${logs.length}회 누적`, sc: PU, bg: PUL, br: PUB },
+                { label: "This Week", val: `${thisWeek}회`, sub: `목표 ${profile.weeklyGoal||3}회 / 총 ${logs.length}회 누적`, sc: PU, bg: PUL, br: PUB },
               ].map((m, i) => (
                 <div key={i} style={{ background: m.bg, borderRadius: 10, padding: "10px 12px", border: `0.5px solid ${m.br}` }}>
                   <div style={{ fontSize: 12, color: T2, marginBottom: 2 }}>{m.label}</div>
@@ -540,7 +614,7 @@ ${daysSinceWorkout >= 3 ? `
                     {log.coaching && (
                       <div style={{ background: GRL, border: `0.5px solid ${GRB}`, borderRadius: 8, padding: "8px 10px", marginTop: 8 }}>
                         <div style={{ fontSize: 12, color: GR, marginBottom: 4, fontWeight: 600 }}>// PT Coaching</div>
-                        <div style={{ fontSize: 13, color: T1, lineHeight: 1.8 }}>{log.coaching}</div>
+                        <div style={{ fontSize: 13, color: T1, lineHeight: 1.8, whiteSpace: "pre-line" }}>{log.coaching}</div>
                       </div>
                     )}
                   </div>
@@ -551,9 +625,8 @@ ${daysSinceWorkout >= 3 ? `
 
         </div>
 
-        {/* 하단 탭바 */}
         <div style={{ display: "flex", borderTop: `0.5px solid ${BD}`, background: CA, position: "sticky", bottom: 0 }}>
-          {[["today","ti-home"],["dashboard","ti-chart-bar"],["calendar","ti-calendar"],["history","ti-history"]].map(([id, icon]) => (
+          {[["today","ti-home"],["dashboard","ti-chart-bar"],["calendar","ti-calendar"],["history","ti-history"],["settings","ti-settings"]].map(([id, icon]) => (
             <button key={id} onClick={() => setTab(id)} style={{ flex: 1, padding: "9px 4px 7px", background: "none", border: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, cursor: "pointer", outline: "none", WebkitTapHighlightColor: "transparent" }}>
               <i className={`ti ${icon}`} style={{ fontSize: 19, color: tab===id ? CY : T4 }} aria-hidden="true" />
               {tab===id && <div style={{ width: 4, height: 4, borderRadius: "50%", background: CY }} />}
@@ -561,7 +634,6 @@ ${daysSinceWorkout >= 3 ? `
           ))}
         </div>
 
-        {/* 상태바 */}
         <div style={{ background: CY, padding: "3px 12px", display: "flex", gap: 14, fontSize: 13, color: "#1e1e2e", fontWeight: 600 }}>
           <span>⎇ main</span>
           <span>✓ {logs.filter(l=>l.date===td).length > 0 ? "저장됨" : "미저장"}</span>
